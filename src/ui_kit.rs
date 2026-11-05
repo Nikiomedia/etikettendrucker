@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::i18n::{decimal, tr};
 use eframe::egui::{
     self, epaint::Shadow, pos2, text::LayoutJob, vec2, Align2, Color32, CornerRadius, FontData, FontDefinitions,
     FontFamily, FontId, Margin, Rect, Response, Sense, Stroke, StrokeKind, TextFormat, Theme, Ui, Visuals,
@@ -451,7 +452,7 @@ pub fn stepper(ui: &mut Ui, value: &mut u32, min: u32, max: u32) {
     painter.text(mid.center(), Align2::CENTER_CENTER, value.to_string(), semibold(15.0), p.text);
 }
 
-/// Zahlenfeld mit deutschem Komma und Einheit.
+/// Zahlenfeld mit Einheit; Komma im Deutschen, Punkt im Englischen. Eingabe geht mit beidem.
 pub fn num<'a>(
     v: &'a mut f32,
     range: std::ops::RangeInclusive<f32>,
@@ -463,7 +464,7 @@ pub fn num<'a>(
         .range(range)
         .speed(speed)
         .suffix(suffix.to_string())
-        .custom_formatter(move |x, _| format!("{x:.decimals$}").replace('.', ","))
+        .custom_formatter(move |x, _| decimal(format!("{x:.decimals$}")))
         .custom_parser(|s| {
             let cleaned: String = s.chars().filter(|c| c.is_ascii_digit() || matches!(c, ',' | '.' | '-')).collect();
             cleaned.replace(',', ".").parse().ok()
@@ -554,7 +555,7 @@ pub enum ChipState<'a> {
 pub fn status_chip(ui: &mut Ui, state: ChipState) -> Response {
     let p = Pal::of(ui);
     let (dot, text, battery) = match &state {
-        ChipState::Off => (p.border_strong, "Nicht verbunden".to_string(), None),
+        ChipState::Off => (p.border_strong, tr("Nicht verbunden", "Not connected").to_string(), None),
         ChipState::Busy(t) => (p.warn, t.to_string(), None),
         ChipState::On { name, battery } => (p.ok, name.to_string(), *battery),
     };
@@ -587,11 +588,11 @@ pub fn status_chip(ui: &mut Ui, state: ChipState) -> Response {
 /// Signalstärke in 0–4 Balken und als Wort.
 pub fn signal_level(rssi: Option<i16>) -> (u8, &'static str) {
     match rssi {
-        Some(r) if r >= -60 => (4, "sehr gut"),
-        Some(r) if r >= -70 => (3, "gut"),
-        Some(r) if r >= -80 => (2, "mittel"),
-        Some(_) => (1, "schwach"),
-        None => (0, "unbekannt"),
+        Some(r) if r >= -60 => (4, tr("sehr gut", "excellent")),
+        Some(r) if r >= -70 => (3, tr("gut", "good")),
+        Some(r) if r >= -80 => (2, tr("mittel", "fair")),
+        Some(_) => (1, tr("schwach", "weak")),
+        None => (0, tr("unbekannt", "unknown")),
     }
 }
 
@@ -698,7 +699,7 @@ pub fn fmt_num(v: f32) -> String {
     if (v - v.round()).abs() < 0.01 {
         format!("{:.0}", v)
     } else {
-        format!("{:.1}", v).replace('.', ",")
+        decimal(format!("{:.1}", v))
     }
 }
 

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use ab_glyph::{point, Font, FontVec, Glyph, PxScale, ScaleFont};
 use image::DynamicImage;
 
+use crate::i18n::tr;
 use crate::model::{Align, BarcodeEl, BarcodeKind, ElementKind, ImageEl, Label, QrEl, TextEl};
 use crate::protocol::PX_PER_MM;
 
@@ -352,10 +353,15 @@ fn draw_text_el(
     let s = c.s;
     let ppm = PX_PER_MM * s;
     if !t.font.is_empty() && !fonts.has_family(&t.font) {
-        warnings.push(format!("Schrift „{}“ ist nicht installiert, nehme {}.", t.font, fonts.default_family()));
+        warnings.push(trf!(
+            "Schrift „{}“ ist nicht installiert, nehme {}.",
+            "Font “{}” is not installed, using {}.",
+            t.font,
+            fonts.default_family()
+        ));
     }
     let Some(font) = fonts.get(&t.font, t.bold, t.italic) else {
-        warnings.push("Keine Schrift gefunden.".into());
+        warnings.push(tr("Keine Schrift gefunden.", "No font found.").into());
         return ElemBox { x: x * s, y: y * s, w: 8.0 * s, h: 8.0 * s, fit_pt: None };
     };
 
@@ -398,7 +404,7 @@ fn draw_qr(c: &mut Canvas, q: &QrEl, x: f32, y: f32, warnings: &mut Vec<String>)
     let code = match qrcode::QrCode::with_error_correction_level(q.content.as_bytes(), qrcode::EcLevel::M) {
         Ok(code) => code,
         Err(_) => {
-            warnings.push("QR-Code: Inhalt ist zu lang.".into());
+            warnings.push(tr("QR-Code: Inhalt ist zu lang.", "QR code: content is too long.").into());
             return ElemBox { x: x * s, y: y * s, w: size * s, h: size * s, fit_pt: None };
         }
     };
@@ -406,7 +412,13 @@ fn draw_qr(c: &mut Canvas, q: &QrEl, x: f32, y: f32, warnings: &mut Vec<String>)
     // Modulgröße in ganzen Druckpunkten, damit der Code scharf druckt
     let module_dots = ((size / n as f32).floor() as i32).max(1);
     if (size / n as f32) < 2.0 {
-        warnings.push("QR-Code ist sehr klein – evtl. schlecht lesbar. Größer machen oder Inhalt kürzen.".into());
+        warnings.push(
+            tr(
+                "QR-Code ist sehr klein – evtl. schlecht lesbar. Größer machen oder Inhalt kürzen.",
+                "QR code is very small and may be hard to scan. Make it larger or shorten the content.",
+            )
+            .into(),
+        );
     }
     let module = module_dots * s as i32;
     let colors = code.to_colors();
@@ -428,10 +440,14 @@ fn encode_barcode(b: &BarcodeEl) -> Result<Vec<u8>, String> {
     match b.kind {
         BarcodeKind::Code128 => {
             if b.content.is_empty() {
-                return Err("Barcode: Inhalt fehlt.".into());
+                return Err(tr("Barcode: Inhalt fehlt.", "Barcode: content is missing.").into());
             }
             if !b.content.chars().all(|c| (' '..='~').contains(&c)) {
-                return Err("Code 128: nur Zeichen ohne Umlaute/Sonderzeichen erlaubt.".into());
+                return Err(tr(
+                    "Code 128: nur Zeichen ohne Umlaute/Sonderzeichen erlaubt.",
+                    "Code 128: only plain characters, no accents or special characters.",
+                )
+                .into());
             }
             barcoders::sym::code128::Code128::new(format!("\u{0181}{}", b.content))
                 .map(|bc| bc.encode())
@@ -440,11 +456,11 @@ fn encode_barcode(b: &BarcodeEl) -> Result<Vec<u8>, String> {
         BarcodeKind::Ean13 => {
             let digits: String = b.content.chars().filter(|c| !c.is_whitespace()).collect();
             if !digits.chars().all(|c| c.is_ascii_digit()) || !(digits.len() == 12 || digits.len() == 13) {
-                return Err("EAN-13: bitte 12 oder 13 Ziffern eingeben.".into());
+                return Err(tr("EAN-13: bitte 12 oder 13 Ziffern eingeben.", "EAN-13: please enter 12 or 13 digits.").into());
             }
             let first12 = &digits[..12];
             if digits.len() == 13 && ean_checksum(first12) != digits.as_bytes()[12] - b'0' {
-                return Err("EAN-13: Prüfziffer (letzte Ziffer) stimmt nicht.".into());
+                return Err(tr("EAN-13: Prüfziffer (letzte Ziffer) stimmt nicht.", "EAN-13: the check digit (last digit) is wrong.").into());
             }
             barcoders::sym::ean13::EAN13::new(first12)
                 .map(|bc| bc.encode())
@@ -508,7 +524,10 @@ fn draw_barcode(c: &mut Canvas, b: &BarcodeEl, x: f32, y: f32, fonts: &Fonts, wa
         }
     }
     if bw > c.w as f32 {
-        warnings.push("Barcode ist breiter als das Etikett. Strichbreite verkleinern.".into());
+        warnings.push(
+            tr("Barcode ist breiter als das Etikett. Strichbreite verkleinern.", "Barcode is wider than the label. Reduce the bar width.")
+                .into(),
+        );
     }
     ElemBox { x: x0 as f32, y: y0 as f32, w: bw, h: total_h, fit_pt: None }
 }
@@ -538,7 +557,7 @@ fn draw_image(c: &mut Canvas, img_el: &ImageEl, x: f32, y: f32, images: &mut Ima
     let si = s as i32;
     let tw = mm_to_px(img_el.width_mm).round().max(2.0) as u32;
     let Some(img) = images.get(&img_el.data) else {
-        warnings.push("Bild konnte nicht gelesen werden.".into());
+        warnings.push(tr("Bild konnte nicht gelesen werden.", "Image could not be read.").into());
         return ElemBox { x: x * s, y: y * s, w: tw as f32 * s, h: tw as f32 * s, fit_pt: None };
     };
     let (iw, ih) = (img.width().max(1), img.height().max(1));

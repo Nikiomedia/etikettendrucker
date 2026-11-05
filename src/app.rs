@@ -17,6 +17,7 @@ use crate::model::{
 use crate::printer::{self, Cmd, Event, FoundPrinter, PrinterHandle};
 use crate::protocol::{self, PaperType, PX_PER_MM};
 use crate::render::{self, ElemBox, Fonts, ImageCache, Rendered};
+use crate::i18n::{self, tr, Lang};
 use crate::ui_kit::{self as kit, icon, Pal, INK, PAPER};
 
 const FILE_EXT: &str = "etikett";
@@ -31,11 +32,13 @@ struct Settings {
     last_printer: Option<String>,
     /// Vorschau als einzelne Druckpunkte statt geglättet
     show_dots: bool,
+    /// Sprache der Oberfläche; beim ersten Start die von Windows
+    lang: Lang,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { label: Label::default(), density: 2, copies: 1, last_printer: None, show_dots: false }
+        Self { label: Label::default(), density: 2, copies: 1, last_printer: None, show_dots: false, lang: i18n::system() }
     }
 }
 
@@ -122,11 +125,18 @@ impl App {
         }
 
         let screenshot = std::env::var_os("ETIKETT_SCREENSHOT").map(|p| (PathBuf::from(p), 0));
+        // Sprache zuerst setzen, damit ein neues Etikett gleich in der richtigen Sprache beschriftet ist
+        let forced_lang = std::env::var("ETIKETT_LANG").ok().map(|l| if l == "en" { Lang::En } else { Lang::De });
+        i18n::set(forced_lang.unwrap_or_else(i18n::system));
         let mut s: Settings = if screenshot.is_some() {
             Settings::default()
         } else {
             cc.storage.and_then(|st| eframe::get_value(st, eframe::APP_KEY)).unwrap_or_default()
         };
+        if let Some(l) = forced_lang {
+            s.lang = l;
+        }
+        i18n::set(s.lang);
         if std::env::var_os("ETIKETT_DEMO").is_some() {
             s.label = demo_label();
         }
@@ -188,7 +198,7 @@ impl App {
         if std::env::var("ETIKETT_DEMO").as_deref() == Ok("verbunden") {
             app.conn = Conn::On("P15_8C3F".into());
             app.battery = Some(76);
-            app.notify(MsgKind::Ok, "Verbunden mit P15_8C3F");
+            app.notify(MsgKind::Ok, trf!("Verbunden mit {}", "Connected to {}", "P15_8C3F"));
         }
         // Zuletzt benutzten Drucker automatisch verbinden
         if app.screenshot.is_none() {
@@ -210,6 +220,18 @@ impl App {
             self.log.pop_front();
         }
         self.log.push_back(line);
+    }
+
+    fn set_lang(&mut self, lang: Lang) {
+        // Ein unverändertes Start-Etikett wechselt mit, eigene Texte bleiben
+        let untouched = self.s.label == Label::default();
+        i18n::set(lang);
+        self.s.lang = lang;
+        if untouched {
+            self.s.label = Label::default();
+        }
+        // Warnungen der Vorschau neu erzeugen
+        self.rendered_for = None;
     }
 
     /// Suche starten und immer die Auswahlliste zeigen.
@@ -245,11 +267,11 @@ impl App {
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, icon::BLUETOOTH, kit::icon_font(17.0), p.accent);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.label(RichText::new("Drucker auswählen").font(kit::semibold(18.0)).color(p.text));
+                        ui.label(RichText::new(tr("Drucker auswählen", "Choose a printer")).font(kit::semibold(18.0)).color(p.text));
                         let hint = if self.choices.len() + self.conn_before_pick.is_some() as usize > 1 {
-                            "Mehrere Drucker in der Nähe – welcher soll es sein?"
+                            tr("Mehrere Drucker in der Nähe – welcher soll es sein?", "Several printers nearby – which one should it be?")
                         } else {
-                            "Wähle den Drucker, mit dem du drucken möchtest."
+                            tr("Wähle den Drucker, mit dem du drucken möchtest.", "Choose the printer you want to print with.")
                         };
                         ui.label(RichText::new(hint).size(13.0).color(p.weak));
                     });
@@ -258,8 +280,8 @@ impl App {
 
                 ui.spacing_mut().item_spacing.y = 8.0;
                 if let Some(cur) = &self.conn_before_pick {
-                    let sub = "Ist gerade verbunden";
-                    if kit::printer_row(ui, cur, sub, Some("Verbunden"), 4, true).on_hover_text("Verbunden bleiben").clicked() {
+                    let sub = tr("Ist gerade verbunden", "Currently connected");
+                    if kit::printer_row(ui, cur, sub, Some(tr("Verbunden", "Connected")), 4, true).on_hover_text(tr("Verbunden bleiben", "Stay connected")).clicked() {
                         keep_current = true;
                     }
                 }
@@ -267,9 +289,9 @@ impl App {
                     let (bars, word) = kit::signal_level(f.rssi);
                     let short_addr: String = f.address.chars().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect();
                     let sub = format!("Signal {word}  ·  …{short_addr}");
-                    let badge = (self.s.last_printer.as_deref() == Some(f.name.as_str())).then_some("Zuletzt benutzt");
+                    let badge = (self.s.last_printer.as_deref() == Some(f.name.as_str())).then_some(tr("Zuletzt benutzt", "Last used"));
                     let resp = kit::printer_row(ui, &f.name, &sub, badge, bars, false)
-                        .on_hover_text(format!("Bluetooth-Adresse {}", f.address));
+                        .on_hover_text(trf!("Bluetooth-Adresse {}", "Bluetooth address {}", f.address));
                     if resp.clicked() {
                         picked = Some(f.address.clone());
                     }
@@ -279,7 +301,7 @@ impl App {
                     ui.vertical_centered(|ui| {
                         ui.add(egui::Spinner::new().size(22.0).color(p.accent));
                         ui.add_space(4.0);
-                        ui.label(RichText::new("Suche Drucker in der Nähe …").color(p.weak));
+                        ui.label(RichText::new(tr("Suche Drucker in der Nähe …", "Looking for printers nearby …")).color(p.weak));
                     });
                     ui.add_space(14.0);
                 }
@@ -288,7 +310,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0).color(p.weak));
                     ui.label(
-                        RichText::new("Suche läuft weiter – eingeschaltete Drucker erscheinen automatisch.")
+                        RichText::new(tr("Suche läuft weiter – eingeschaltete Drucker erscheinen automatisch.", "Still searching – printers that are switched on show up automatically."))
                             .size(12.0)
                             .color(p.weak),
                     );
@@ -296,7 +318,7 @@ impl App {
                 ui.add_space(4.0);
                 let mut cancel = false;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if kit::tool_button(ui, icon::CLOSE, "Abbrechen").clicked() {
+                    if kit::tool_button(ui, icon::CLOSE, tr("Abbrechen", "Cancel")).clicked() {
                         cancel = true;
                     }
                 });
@@ -373,8 +395,8 @@ impl App {
                 }
                 Event::Connecting(n) => self.conn = Conn::Connecting(n),
                 Event::Connected(n) => {
-                    self.push_log(format!("Verbunden mit {n}"));
-                    self.notify(MsgKind::Ok, format!("Verbunden mit {n}"));
+                    self.push_log(trf!("Verbunden mit {n}", "Connected to {n}"));
+                    self.notify(MsgKind::Ok, trf!("Verbunden mit {n}", "Connected to {n}"));
                     self.conn = Conn::On(n.clone());
                     self.conn_before_pick = None;
                     self.choices.clear();
@@ -386,7 +408,7 @@ impl App {
                         self.conn = Conn::Off;
                         self.battery = None;
                         if !self.printing {
-                            self.notify(MsgKind::Info, "Drucker getrennt.");
+                            self.notify(MsgKind::Info, tr("Drucker getrennt.", "Printer disconnected."));
                         }
                     } else if self.conn == Conn::Picking {
                         // Der bisher verbundene Drucker ist während der Auswahl weggefallen
@@ -395,9 +417,11 @@ impl App {
                     }
                 }
                 Event::Battery(b) => self.battery = Some(b),
-                Event::Status(s) => {
+                Event::Status(code) => {
+                    let s = protocol::status_text(code);
                     self.push_log(format!("Status: {s}"));
-                    let kind = if s.contains("geschlossen") { MsgKind::Info } else { MsgKind::Error };
+                    // 0x05 = Deckel geschlossen, also keine Störung
+                    let kind = if code == 0x05 { MsgKind::Info } else { MsgKind::Error };
                     self.notify(kind, s);
                 }
                 Event::Progress { sent, total } => {
@@ -409,22 +433,22 @@ impl App {
                     let n = self.s.copies.max(1);
                     self.notify(
                         MsgKind::Ok,
-                        if n == 1 { "Etikett gedruckt.".to_string() } else { format!("{n} Etiketten gedruckt.") },
+                        if n == 1 { tr("Etikett gedruckt.", "Label printed.").to_string() } else { trf!("{n} Etiketten gedruckt.", "{n} labels printed.") },
                     );
                 }
                 Event::PrintDone(Err(e)) => {
                     self.printing = false;
-                    self.push_log(format!("Druckfehler: {e}"));
+                    self.push_log(trf!("Druckfehler: {e}", "Print error: {e}"));
                     self.notify(MsgKind::Error, e);
                 }
                 Event::Error(e) => {
-                    self.push_log(format!("Fehler: {e}"));
+                    self.push_log(trf!("Fehler: {e}", "Error: {e}"));
                     if matches!(self.conn, Conn::Searching | Conn::Connecting(_) | Conn::Picking) {
                         self.conn = Conn::Off;
                         self.choices.clear();
                     }
                     if self.startup_connect {
-                        self.notify(MsgKind::Info, "Drucker nicht gefunden. Einschalten und auf „Verbinden“ klicken.");
+                        self.notify(MsgKind::Info, tr("Drucker nicht gefunden. Einschalten und auf „Verbinden“ klicken.", "Printer not found. Turn it on and click “Connect”."));
                     } else {
                         self.notify(MsgKind::Error, e);
                     }
@@ -491,7 +515,7 @@ impl App {
     // ------------------------------------------------------------ Dateien
 
     fn open_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("Etikett-Vorlage", &[FILE_EXT]).pick_file() {
+        if let Some(p) = rfd::FileDialog::new().add_filter(tr("Etikett-Vorlage", "Label template"), &[FILE_EXT]).pick_file() {
             self.open_file(&p);
         }
     }
@@ -505,9 +529,9 @@ impl App {
                 self.s.label = label;
                 self.selected = if self.s.label.elements.is_empty() { None } else { Some(0) };
                 self.file = Some(path.to_path_buf());
-                self.notify(MsgKind::Ok, format!("Geöffnet: {}", file_name(path)));
+                self.notify(MsgKind::Ok, trf!("Geöffnet: {}", "Opened: {}", file_name(path)));
             }
-            Err(e) => self.notify(MsgKind::Error, format!("Datei konnte nicht geöffnet werden: {e}")),
+            Err(e) => self.notify(MsgKind::Error, trf!("Datei konnte nicht geöffnet werden: {e}", "Could not open the file: {e}")),
         }
     }
 
@@ -515,8 +539,8 @@ impl App {
         let path = match (&self.file, save_as) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
-                .add_filter("Etikett-Vorlage", &[FILE_EXT])
-                .set_file_name(format!("etikett.{FILE_EXT}"))
+                .add_filter(tr("Etikett-Vorlage", "Label template"), &[FILE_EXT])
+                .set_file_name(format!("{}.{FILE_EXT}", tr("etikett", "label")))
                 .save_file(),
         };
         let Some(mut path) = path else { return };
@@ -526,10 +550,10 @@ impl App {
         let json = serde_json::to_string_pretty(&self.s.label).expect("Etikett als JSON");
         match std::fs::write(&path, json) {
             Ok(()) => {
-                self.notify(MsgKind::Ok, format!("Gespeichert: {}", file_name(&path)));
+                self.notify(MsgKind::Ok, trf!("Gespeichert: {}", "Saved: {}", file_name(&path)));
                 self.file = Some(path);
             }
-            Err(e) => self.notify(MsgKind::Error, format!("Speichern fehlgeschlagen: {e}")),
+            Err(e) => self.notify(MsgKind::Error, trf!("Speichern fehlgeschlagen: {e}", "Saving failed: {e}")),
         }
     }
 
@@ -576,7 +600,7 @@ impl App {
     }
 
     fn add_image_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("Bilder", IMAGE_EXTS).pick_file() {
+        if let Some(p) = rfd::FileDialog::new().add_filter(tr("Bilder", "Images"), IMAGE_EXTS).pick_file() {
             self.add_image(&p);
         }
     }
@@ -584,10 +608,10 @@ impl App {
     fn add_image(&mut self, path: &Path) {
         let data = match std::fs::read(path) {
             Ok(d) => d,
-            Err(e) => return self.notify(MsgKind::Error, format!("Bild nicht lesbar: {e}")),
+            Err(e) => return self.notify(MsgKind::Error, trf!("Bild nicht lesbar: {e}", "Could not read the image: {e}")),
         };
         let Ok(img) = image::load_from_memory(&data) else {
-            return self.notify(MsgKind::Error, "Dieses Bildformat wird nicht unterstützt.");
+            return self.notify(MsgKind::Error, tr("Dieses Bildformat wird nicht unterstützt.", "This image format is not supported."));
         };
         let l = &self.s.label;
         let max_h = (l.height_mm - 2.0).max(2.0);
@@ -717,28 +741,32 @@ impl App {
                 ui.add_space(6.0);
 
                 ui.spacing_mut().item_spacing.x = 2.0;
-                if kit::tool_button(ui, icon::NEW, "Neu").on_hover_text("Neues Etikett").clicked() {
+                if kit::tool_button(ui, icon::NEW, tr("Neu", "New")).on_hover_text(tr("Neues Etikett", "New label")).clicked() {
                     self.s.label = Label::default();
                     self.selected = Some(0);
                     self.file = None;
                 }
-                if kit::tool_button(ui, icon::OPEN, "Öffnen").on_hover_text("Vorlage öffnen (Strg+O)").clicked() {
+                if kit::tool_button(ui, icon::OPEN, tr("Öffnen", "Open")).on_hover_text(tr("Vorlage öffnen (Strg+O)", "Open template (Ctrl+O)")).clicked() {
                     self.open_dialog();
                 }
-                if kit::tool_button(ui, icon::SAVE, "Speichern").on_hover_text("Vorlage speichern (Strg+S)").clicked() {
+                if kit::tool_button(ui, icon::SAVE, tr("Speichern", "Save")).on_hover_text(tr("Vorlage speichern (Strg+S)", "Save template (Ctrl+S)")).clicked() {
                     self.save(false);
                 }
-                if kit::tool_button(ui, icon::SAVE_AS, "").on_hover_text("Speichern unter …").clicked() {
+                if kit::tool_button(ui, icon::SAVE_AS, "").on_hover_text(tr("Speichern unter …", "Save as …")).clicked() {
                     self.save(true);
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if kit::icon_button(ui, icon::INFO, None).on_hover_text("Über diese App").clicked() {
+                    if kit::icon_button(ui, icon::INFO, None).on_hover_text(tr("Über diese App", "About this app")).clicked() {
                         self.show_about = !self.show_about;
                     }
+                    let mut lang = self.s.lang;
+                    if kit::segmented(ui, &mut lang, &[(Lang::De, "DE"), (Lang::En, "EN")], false) {
+                        self.set_lang(lang);
+                    }
                     if kit::icon_button(ui, icon::LIST, if self.show_log { Some(p.accent) } else { None })
-                        .on_hover_text("Protokoll (für Fehlersuche)")
+                        .on_hover_text(tr("Protokoll (für Fehlersuche)", "Log (for troubleshooting)"))
                         .clicked()
                     {
                         self.show_log = !self.show_log;
@@ -746,34 +774,34 @@ impl App {
                     ui.add_space(6.0);
                     match self.conn.clone() {
                         Conn::Off => {
-                            if kit::primary_button(ui, icon::BLUETOOTH, "Verbinden", vec2(124.0, 32.0), true, None)
-                                .on_hover_text("Drucker per Bluetooth suchen und verbinden")
+                            if kit::primary_button(ui, icon::BLUETOOTH, tr("Verbinden", "Connect"), vec2(124.0, 32.0), true, None)
+                                .on_hover_text(tr("Drucker per Bluetooth suchen und verbinden", "Find and connect a printer via Bluetooth"))
                                 .clicked()
                             {
                                 self.connect();
                             }
                             if kit::status_chip(ui, kit::ChipState::Off)
-                                .on_hover_text("Klicken, um einen Drucker aus einer Liste zu wählen")
+                                .on_hover_text(tr("Klicken, um einen Drucker aus einer Liste zu wählen", "Click to choose a printer from a list"))
                                 .clicked()
                             {
                                 self.choose_printer();
                             }
                         }
                         Conn::Searching => {
-                            kit::status_chip(ui, kit::ChipState::Busy("Suche Drucker …"));
+                            kit::status_chip(ui, kit::ChipState::Busy(tr("Suche Drucker …", "Searching for printers …")));
                         }
                         Conn::Picking => {
-                            kit::status_chip(ui, kit::ChipState::Busy("Drucker auswählen …"));
+                            kit::status_chip(ui, kit::ChipState::Busy(tr("Drucker auswählen …", "Choosing printer …")));
                         }
                         Conn::Connecting(n) => {
-                            kit::status_chip(ui, kit::ChipState::Busy(&format!("Verbinde mit {n} …")));
+                            kit::status_chip(ui, kit::ChipState::Busy(&trf!("Verbinde mit {n} …", "Connecting to {n} …")));
                         }
                         Conn::On(name) => {
-                            if kit::icon_button(ui, icon::DISCONNECT, None).on_hover_text("Verbindung trennen").clicked() {
+                            if kit::icon_button(ui, icon::DISCONNECT, None).on_hover_text(tr("Verbindung trennen", "Disconnect")).clicked() {
                                 self.printer.send(Cmd::Disconnect);
                             }
                             if kit::status_chip(ui, kit::ChipState::On { name: &name, battery: self.battery })
-                                .on_hover_text("Verbunden über Bluetooth – klicken, um einen anderen Drucker zu wählen")
+                                .on_hover_text(tr("Verbunden über Bluetooth – klicken, um einen anderen Drucker zu wählen", "Connected via Bluetooth – click to choose another printer"))
                                 .clicked()
                                 && !self.printing
                             {
@@ -799,8 +827,8 @@ impl App {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 10.0;
                 kit::card(ui, |ui| {
-                    kit::card_title(ui, icon::NEW, "Etikett");
-                    kit::field_label(ui, "Größe in mm (Breite × Höhe)");
+                    kit::card_title(ui, icon::NEW, tr("Etikett", "Label"));
+                    kit::field_label(ui, tr("Größe in mm (Breite × Höhe)", "Size in mm (width × height)"));
                     let l = &mut self.s.label;
                     let gap = 6.0;
                     let tile_w = ((ui.available_width() - 3.0 * gap) / 4.0).floor();
@@ -820,32 +848,32 @@ impl App {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
-                        kit::field_label(ui, "Eigene:");
+                        kit::field_label(ui, tr("Eigene:", "Custom:"));
                         ui.add_sized([80.0, 28.0], kit::num(&mut l.width_mm, MIN_W_MM..=MAX_W_MM, 0.5, 1, " mm"))
-                            .on_hover_text("Breite");
+                            .on_hover_text(tr("Breite", "Width"));
                         ui.label(RichText::new("×").color(p.weak));
                         ui.add_sized([80.0, 28.0], kit::num(&mut l.height_mm, MIN_H_MM..=MAX_H_MM, 0.2, 1, " mm"))
-                            .on_hover_text("Höhe");
+                            .on_hover_text(tr("Höhe", "Height"));
                     });
                     ui.add_space(4.0);
-                    kit::field_label(ui, "Papier");
+                    kit::field_label(ui, tr("Papier", "Paper"));
                     kit::segmented(
                         ui,
                         &mut l.paper,
-                        &[(PaperType::Gap, "Etiketten mit Lücke"), (PaperType::Continuous, "Endlos")],
+                        &[(PaperType::Gap, tr("Etiketten mit Lücke", "Labels with gaps")), (PaperType::Continuous, tr("Endlos", "Continuous"))],
                         false,
                     );
                     ui.add_space(4.0);
-                    kit::switch_row(ui, "Rahmen", &mut l.frame.enabled);
+                    kit::switch_row(ui, tr("Rahmen", "Frame"), &mut l.frame.enabled);
                     if l.frame.enabled {
                         egui::Grid::new("rahmen").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                            kit::field_label(ui, "Linie");
-                            ui.add(egui::DragValue::new(&mut l.frame.thickness_px).range(1..=8).suffix(" Punkte"));
+                            kit::field_label(ui, tr("Linie", "Line"));
+                            ui.add(egui::DragValue::new(&mut l.frame.thickness_px).range(1..=8).suffix(tr(" Punkte", " dots")));
                             ui.end_row();
-                            kit::field_label(ui, "Abstand");
+                            kit::field_label(ui, tr("Abstand", "Inset"));
                             ui.add(kit::num(&mut l.frame.inset_mm, 0.0..=4.0, 0.05, 1, " mm"));
                             ui.end_row();
-                            kit::field_label(ui, "Ecken");
+                            kit::field_label(ui, tr("Ecken", "Corners"));
                             ui.add(kit::num(&mut l.frame.radius_mm, 0.0..=6.0, 0.05, 1, " mm"));
                             ui.end_row();
                         });
@@ -853,7 +881,7 @@ impl App {
                 });
 
                 kit::card(ui, |ui| {
-                    kit::card_title(ui, icon::ADD, "Hinzufügen");
+                    kit::card_title(ui, icon::ADD, tr("Hinzufügen", "Add"));
                     let gap = 8.0;
                     let w = ((ui.available_width() - gap) / 2.0).floor();
                     let size = vec2(w, 60.0);
@@ -862,7 +890,7 @@ impl App {
                         if kit::add_tile(ui, icon::TEXT, "Text", size).clicked() {
                             self.add_text();
                         }
-                        if kit::add_tile(ui, icon::QR, "QR-Code", size).clicked() {
+                        if kit::add_tile(ui, icon::QR, tr("QR-Code", "QR code"), size).clicked() {
                             self.add_qr();
                         }
                     });
@@ -872,22 +900,22 @@ impl App {
                         if kit::add_tile(ui, icon::BARCODE, "Barcode", size).clicked() {
                             self.add_barcode();
                         }
-                        if kit::add_tile(ui, icon::IMAGE, "Bild", size).on_hover_text("Bild wählen oder ins Fenster ziehen").clicked() {
+                        if kit::add_tile(ui, icon::IMAGE, tr("Bild", "Image"), size).on_hover_text(tr("Bild wählen oder ins Fenster ziehen", "Choose an image or drag it into the window")).clicked() {
                             self.add_image_dialog();
                         }
                     });
                 });
 
                 kit::card(ui, |ui| {
-                    kit::card_title(ui, icon::LAYERS, "Ebenen");
+                    kit::card_title(ui, icon::LAYERS, tr("Ebenen", "Layers"));
                     if self.s.label.elements.is_empty() {
-                        ui.label(RichText::new("Noch leer – füge oben etwas hinzu.").color(p.weak));
+                        ui.label(RichText::new(tr("Noch leer – füge oben etwas hinzu.", "Still empty – add something above.")).color(p.weak));
                     }
                     ui.spacing_mut().item_spacing.y = 2.0;
                     for i in (0..self.s.label.elements.len()).rev() {
                         let el = &self.s.label.elements[i];
                         let sub = el.summary();
-                        let sub = if sub.is_empty() { "(leer)".to_string() } else { sub };
+                        let sub = if sub.is_empty() { tr("(leer)", "(empty)").to_string() } else { sub };
                         if kit::layer_row(ui, element_icon(el), el.type_name(), &sub, self.selected == Some(i)).clicked() {
                             self.selected = Some(i);
                         }
@@ -895,7 +923,10 @@ impl App {
                 });
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Tipp: Elemente in der Vorschau mit der Maus verschieben, mit den Pfeiltasten feinjustieren. Bilder einfach ins Fenster ziehen.")
+                    RichText::new(tr(
+                        "Tipp: Elemente in der Vorschau mit der Maus verschieben, mit den Pfeiltasten feinjustieren. Bilder einfach ins Fenster ziehen.",
+                        "Tip: drag elements in the preview with the mouse and fine-tune them with the arrow keys. Simply drop images into the window.",
+                    ))
                         .size(12.0)
                         .color(p.weak),
                 );
@@ -910,8 +941,11 @@ impl App {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 let Some(idx) = self.selected.filter(|&i| i < self.s.label.elements.len()) else {
                     kit::card(ui, |ui| {
-                        kit::card_title(ui, icon::MOVE, "Eigenschaften");
-                        ui.label(RichText::new("Klicke ein Element in der Vorschau oder in der Ebenenliste an, um es zu bearbeiten.").color(p.weak));
+                        kit::card_title(ui, icon::MOVE, tr("Eigenschaften", "Properties"));
+                        ui.label(RichText::new(tr(
+                            "Klicke ein Element in der Vorschau oder in der Ebenenliste an, um es zu bearbeiten.",
+                            "Click an element in the preview or in the layer list to edit it.",
+                        )).color(p.weak));
                     });
                     return;
                 };
@@ -946,13 +980,13 @@ impl App {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    kit::field_label(ui, "Druckstärke");
-                    kit::segmented(ui, &mut self.s.density, &[(1, "Hell"), (2, "Normal"), (3, "Dunkel")], false);
+                    kit::field_label(ui, tr("Druckstärke", "Print density"));
+                    kit::segmented(ui, &mut self.s.density, &[(1, tr("Hell", "Light")), (2, "Normal"), (3, tr("Dunkel", "Dark"))], false);
                 });
                 ui.add_space(8.0);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    kit::field_label(ui, "Anzahl");
+                    kit::field_label(ui, tr("Anzahl", "Copies"));
                     kit::stepper(ui, &mut self.s.copies, 1, 99);
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -960,28 +994,28 @@ impl App {
                     match &self.conn {
                         _ if self.printing => {
                             let pct = (self.progress * 100.0).round() as u32;
-                            kit::primary_button(ui, icon::PRINT, &format!("Drucke … {pct} %"), size, false, Some(self.progress));
+                            kit::primary_button(ui, icon::PRINT, &trf!("Drucke … {pct} %", "Printing … {pct} %"), size, false, Some(self.progress));
                         }
                         Conn::On(_) => {
                             let n = self.s.copies.max(1);
-                            let text = if n == 1 { "Drucken".to_string() } else { format!("{n}× drucken") };
+                            let text = if n == 1 { tr("Drucken", "Print").to_string() } else { trf!("{n}× drucken", "Print {n}×") };
                             let resp = kit::primary_button(ui, icon::PRINT, &text, size, self.can_print(), None);
-                            if resp.on_hover_text("Strg+P").clicked() {
+                            if resp.on_hover_text(tr("Strg+P", "Ctrl+P")).clicked() {
                                 self.print();
                             }
                         }
                         Conn::Off => {
                             // Ohne Verbindung verbindet der Knopf erst einmal
-                            let resp = kit::primary_button(ui, icon::BLUETOOTH, "Drucker verbinden", size, true, None);
-                            if resp.on_hover_text("Drucker einschalten, dann hier klicken").clicked() {
+                            let resp = kit::primary_button(ui, icon::BLUETOOTH, tr("Drucker verbinden", "Connect printer"), size, true, None);
+                            if resp.on_hover_text(tr("Drucker einschalten, dann hier klicken", "Turn the printer on, then click here")).clicked() {
                                 self.connect();
                             }
                         }
                         Conn::Picking => {
-                            kit::primary_button(ui, icon::BLUETOOTH, "Drucker wählen …", size, false, None);
+                            kit::primary_button(ui, icon::BLUETOOTH, tr("Drucker wählen …", "Choose printer …"), size, false, None);
                         }
                         Conn::Searching | Conn::Connecting(_) => {
-                            kit::primary_button(ui, icon::BLUETOOTH, "Suche Drucker …", size, false, None);
+                            kit::primary_button(ui, icon::BLUETOOTH, tr("Suche Drucker …", "Searching for printers …"), size, false, None);
                         }
                     }
                 });
@@ -1023,7 +1057,7 @@ impl App {
         ui.scope_builder(
             egui::UiBuilder::new().max_rect(toggle_row).layout(egui::Layout::top_down(egui::Align::Center)),
             |ui| {
-                kit::segmented(ui, &mut self.s.show_dots, &[(false, "Glatt"), (true, "Druckpunkte")], false);
+                kit::segmented(ui, &mut self.s.show_dots, &[(false, tr("Glatt", "Smooth")), (true, tr("Druckpunkte", "Print dots"))], false);
             },
         );
 
@@ -1117,8 +1151,8 @@ impl App {
             "{} × {} mm   ·   {}   ·   {}",
             kit::fmt_num(l.width_mm),
             kit::fmt_num(l.height_mm),
-            if l.paper == PaperType::Gap { "Etiketten mit Lücke" } else { "Endlospapier" },
-            if self.s.show_dots { "jeder Druckpunkt = 1/8 mm" } else { "Vorschau in Originaloptik" }
+            if l.paper == PaperType::Gap { tr("Etiketten mit Lücke", "Labels with gaps") } else { tr("Endlospapier", "continuous paper") },
+            if self.s.show_dots { tr("jeder Druckpunkt = 1/8 mm", "each dot = 1/8 mm") } else { tr("Vorschau in Originaloptik", "preview as printed") }
         );
         painter.text(pos2(rect.center().x, rect.max.y + 20.0), Align2::CENTER_TOP, caption, FontId::proportional(12.5), p.weak);
         let mut warnings = r.warnings.clone();
@@ -1231,22 +1265,23 @@ impl App {
 
     fn log_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_log;
-        egui::Window::new(RichText::new("Protokoll").font(kit::semibold(15.0)))
+        egui::Window::new(RichText::new(tr("Protokoll", "Log")).font(kit::semibold(15.0)))
+            .id(egui::Id::new("protokoll"))
             .open(&mut open)
             .default_size([560.0, 340.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if kit::tool_button(ui, icon::COPY, "Kopieren").clicked() {
+                    if kit::tool_button(ui, icon::COPY, tr("Kopieren", "Copy")).clicked() {
                         ctx.copy_text(self.log.iter().cloned().collect::<Vec<_>>().join("\n"));
                     }
-                    if kit::tool_button(ui, icon::DELETE, "Leeren").clicked() {
+                    if kit::tool_button(ui, icon::DELETE, tr("Leeren", "Clear")).clicked() {
                         self.log.clear();
                     }
                 });
                 ui.separator();
                 egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
                     if self.log.is_empty() {
-                        ui.label(RichText::new("Noch keine Einträge.").weak());
+                        ui.label(RichText::new(tr("Noch keine Einträge.", "No entries yet.")).weak());
                     }
                     for line in &self.log {
                         ui.label(RichText::new(line).monospace());
@@ -1275,19 +1310,24 @@ impl App {
                     ui.label(RichText::new("Etikettendrucker").font(kit::semibold(20.0)).color(p.text));
                     ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(p.weak));
                     ui.add_space(8.0);
-                    ui.label("Etiketten gestalten und drucken mit Bluetooth-Druckern der Reihe Pristar / Marklife P15 – direkt vom PC.");
+                    ui.label(tr(
+                        "Etiketten gestalten und drucken mit Bluetooth-Druckern der Reihe Pristar / Marklife P15 – direkt vom PC.",
+                        "Design and print labels on Pristar / Marklife P15 Bluetooth printers – straight from your PC.",
+                    ));
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new(
+                        RichText::new(tr(
                             "Das Druckprotokoll stammt aus dem Open-Source-Projekt „thermoprint“ (MIT-Lizenz). \
                              Kein offizielles Produkt von Pristar oder Marklife.",
-                        )
+                            "The print protocol comes from the open-source project “thermoprint” (MIT license). \
+                             Not an official Pristar or Marklife product.",
+                        ))
                         .size(12.5)
                         .color(p.weak),
                     );
                     ui.hyperlink_to("github.com/tomLadder/thermoprint", "https://github.com/tomLadder/thermoprint");
                     ui.add_space(10.0);
-                    if kit::primary_button(ui, icon::CHECK, "Schließen", vec2(140.0, 34.0), true, None).clicked() {
+                    if kit::primary_button(ui, icon::CHECK, tr("Schließen", "Close"), vec2(140.0, 34.0), true, None).clicked() {
                         self.show_about = false;
                     }
                     ui.add_space(4.0);
@@ -1402,16 +1442,16 @@ fn element_props(
         ui.label(RichText::new(el.type_name()).font(kit::semibold(16.0)).color(p.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if kit::icon_button(ui, icon::DELETE, Some(p.danger)).on_hover_text("Löschen (Entf)").clicked() {
+            if kit::icon_button(ui, icon::DELETE, Some(p.danger)).on_hover_text(tr("Löschen (Entf)", "Delete (Del)")).clicked() {
                 action = Some(ListAction::Delete);
             }
-            if kit::icon_button(ui, icon::COPY, None).on_hover_text("Duplizieren").clicked() {
+            if kit::icon_button(ui, icon::COPY, None).on_hover_text(tr("Duplizieren", "Duplicate")).clicked() {
                 action = Some(ListAction::Duplicate);
             }
-            if kit::icon_button(ui, icon::DOWN, None).on_hover_text("Eine Ebene nach hinten").clicked() {
+            if kit::icon_button(ui, icon::DOWN, None).on_hover_text(tr("Eine Ebene nach hinten", "Send backward")).clicked() {
                 action = Some(ListAction::Backward);
             }
-            if kit::icon_button(ui, icon::UP, None).on_hover_text("Eine Ebene nach vorne").clicked() {
+            if kit::icon_button(ui, icon::UP, None).on_hover_text(tr("Eine Ebene nach vorne", "Bring forward")).clicked() {
                 action = Some(ListAction::Forward);
             }
         });
@@ -1419,9 +1459,9 @@ fn element_props(
 
     match &mut el.kind {
         ElementKind::Text(t) => {
-            section(ui, "Inhalt");
-            ui.add(egui::TextEdit::multiline(&mut t.text).desired_rows(3).desired_width(full).hint_text("Text eingeben …"));
-            section(ui, "Schrift");
+            section(ui, tr("Inhalt", "Content"));
+            ui.add(egui::TextEdit::multiline(&mut t.text).desired_rows(3).desired_width(full).hint_text(tr("Text eingeben …", "Enter text …")));
+            section(ui, tr("Schrift", "Font"));
             let shown = if t.font.is_empty() { fonts.default_family().to_string() } else { t.font.clone() };
             egui::ComboBox::from_id_salt("schrift")
                 .selected_text(&shown)
@@ -1436,8 +1476,8 @@ fn element_props(
                 });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                kit::icon_toggle(ui, icon::BOLD, &mut t.bold, "Fett");
-                kit::icon_toggle(ui, icon::ITALIC, &mut t.italic, "Kursiv");
+                kit::icon_toggle(ui, icon::BOLD, &mut t.bold, tr("Fett", "Bold"));
+                kit::icon_toggle(ui, icon::ITALIC, &mut t.italic, tr("Kursiv", "Italic"));
                 ui.add_space(8.0);
                 let al = icon::ALIGN_LEFT.to_string();
                 let ac = icon::ALIGN_CENTER.to_string();
@@ -1449,9 +1489,9 @@ fn element_props(
                     true,
                 );
             });
-            section(ui, "Größe");
+            section(ui, tr("Größe", "Size"));
             let was_fit = t.fit;
-            kit::switch_row(ui, "Automatisch ans Etikett anpassen", &mut t.fit);
+            kit::switch_row(ui, tr("Automatisch ans Etikett anpassen", "Fit to label automatically"), &mut t.fit);
             if was_fit && !t.fit {
                 if let Some(b) = bx {
                     if let Some(pt) = b.fit_pt {
@@ -1462,19 +1502,19 @@ fn element_props(
                 }
             }
             egui::Grid::new("textgrid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                kit::field_label(ui, "Schriftgröße");
+                kit::field_label(ui, tr("Schriftgröße", "Font size"));
                 if t.fit {
                     let pt = bx.and_then(|b| b.fit_pt).unwrap_or(t.size_pt);
                     ui.label(RichText::new(format!("{pt:.0} pt")).color(p.weak));
                     ui.end_row();
-                    kit::field_label(ui, "Abstand zum Rand");
+                    kit::field_label(ui, tr("Abstand zum Rand", "Margin"));
                     ui.add_sized([110.0, 28.0], kit::num(margin_mm, 0.0..=5.0, 0.05, 1, " mm"));
                 } else {
                     ui.add_sized([110.0, 28.0], kit::num(&mut t.size_pt, 3.0..=300.0, 0.2, 1, " pt"));
                 }
                 ui.end_row();
                 if t.text.contains('\n') {
-                    kit::field_label(ui, "Zeilenabstand");
+                    kit::field_label(ui, tr("Zeilenabstand", "Line spacing"));
                     ui.add_sized([110.0, 28.0], kit::num(&mut t.line_spacing, 0.5..=3.0, 0.01, 2, ""));
                     ui.end_row();
                 }
@@ -1482,78 +1522,78 @@ fn element_props(
             positioned = !t.fit;
         }
         ElementKind::Qr(q) => {
-            section(ui, "Inhalt");
+            section(ui, tr("Inhalt", "Content"));
             ui.add(
                 egui::TextEdit::multiline(&mut q.content)
                     .desired_rows(2)
                     .desired_width(full)
-                    .hint_text("Text oder Link, z. B. https://…"),
+                    .hint_text(tr("Text oder Link, z. B. https://…", "Text or link, e.g. https://…")),
             );
-            section(ui, "Größe");
+            section(ui, tr("Größe", "Size"));
             egui::Grid::new("qrgrid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                kit::field_label(ui, "Kantenlänge");
+                kit::field_label(ui, tr("Kantenlänge", "Side length"));
                 ui.add_sized([110.0, 28.0], kit::num(&mut q.size_mm, 3.0..=60.0, 0.1, 1, " mm"));
                 ui.end_row();
             });
         }
         ElementKind::Barcode(b) => {
-            section(ui, "Inhalt");
+            section(ui, tr("Inhalt", "Content"));
             kit::segmented(ui, &mut b.kind, &[(BarcodeKind::Code128, "Code 128"), (BarcodeKind::Ean13, "EAN-13")], false);
-            let hint = if b.kind == BarcodeKind::Ean13 { "12 oder 13 Ziffern" } else { "Buchstaben und Zahlen" };
+            let hint = if b.kind == BarcodeKind::Ean13 { tr("12 oder 13 Ziffern", "12 or 13 digits") } else { tr("Buchstaben und Zahlen", "Letters and numbers") };
             ui.add(egui::TextEdit::singleline(&mut b.content).desired_width(full).hint_text(hint));
-            kit::switch_row(ui, "Klartext darunter", &mut b.show_text);
-            section(ui, "Größe");
+            kit::switch_row(ui, tr("Klartext darunter", "Show text below"), &mut b.show_text);
+            section(ui, tr("Größe", "Size"));
             egui::Grid::new("bcgrid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                kit::field_label(ui, "Höhe");
+                kit::field_label(ui, tr("Höhe", "Height"));
                 ui.add_sized([110.0, 28.0], kit::num(&mut b.height_mm, 2.0..=40.0, 0.1, 1, " mm"));
                 ui.end_row();
-                kit::field_label(ui, "Strichbreite");
-                ui.add_sized([110.0, 28.0], egui::DragValue::new(&mut b.module_px).range(1..=6).suffix(" Punkte"));
+                kit::field_label(ui, tr("Strichbreite", "Bar width"));
+                ui.add_sized([110.0, 28.0], egui::DragValue::new(&mut b.module_px).range(1..=6).suffix(tr(" Punkte", " dots")));
                 ui.end_row();
             });
         }
         ElementKind::Image(img) => {
-            section(ui, "Bild");
-            if kit::tool_button(ui, icon::OPEN, "Anderes Bild wählen …").clicked() {
-                if let Some(path) = rfd::FileDialog::new().add_filter("Bilder", IMAGE_EXTS).pick_file() {
+            section(ui, tr("Bild", "Image"));
+            if kit::tool_button(ui, icon::OPEN, tr("Anderes Bild wählen …", "Choose another image …")).clicked() {
+                if let Some(path) = rfd::FileDialog::new().add_filter(tr("Bilder", "Images"), IMAGE_EXTS).pick_file() {
                     if let Ok(data) = std::fs::read(&path) {
                         img.data = Arc::new(data);
                     }
                 }
             }
             egui::Grid::new("imggrid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                kit::field_label(ui, "Breite");
+                kit::field_label(ui, tr("Breite", "Width"));
                 ui.add_sized([110.0, 28.0], kit::num(&mut img.width_mm, 1.0..=MAX_W_MM, 0.1, 1, " mm"));
                 ui.end_row();
             });
-            section(ui, "Darstellung");
-            kit::switch_row(ui, "Rastern (für Fotos)", &mut img.dither);
+            section(ui, tr("Darstellung", "Appearance"));
+            kit::switch_row(ui, tr("Rastern (für Fotos)", "Dither (for photos)"), &mut img.dither);
             if !img.dither {
-                kit::field_label(ui, "Schwelle hell/dunkel");
+                kit::field_label(ui, tr("Schwelle hell/dunkel", "Light/dark threshold"));
                 ui.add(egui::Slider::new(&mut img.threshold, 1..=254).show_value(false));
             }
-            kit::switch_row(ui, "Invertieren", &mut img.invert);
+            kit::switch_row(ui, tr("Invertieren", "Invert"), &mut img.invert);
         }
     }
 
     if positioned {
         section(ui, "Position");
         egui::Grid::new("posgrid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            kit::field_label(ui, "Von links");
+            kit::field_label(ui, tr("Von links", "From left"));
             ui.add_sized([110.0, 28.0], kit::num(&mut x_mm, -50.0..=MAX_W_MM, 0.05, 2, " mm"));
             ui.end_row();
-            kit::field_label(ui, "Von oben");
+            kit::field_label(ui, tr("Von oben", "From top"));
             ui.add_sized([110.0, 28.0], kit::num(&mut y_mm, -50.0..=MAX_W_MM, 0.05, 2, " mm"));
             ui.end_row();
         });
         if let Some(b) = bx {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                kit::field_label(ui, "Mittig:");
-                if kit::tool_button(ui, icon::ALIGN_CENTER, "Waagrecht").clicked() {
+                kit::field_label(ui, tr("Mittig:", "Center:"));
+                if kit::tool_button(ui, icon::ALIGN_CENTER, tr("Waagrecht", "Horizontally")).clicked() {
                     x_mm = ((lw as f32 - b.w) / 2.0).round() / PX_PER_MM;
                 }
-                if kit::tool_button(ui, icon::MOVE, "Senkrecht").clicked() {
+                if kit::tool_button(ui, icon::MOVE, tr("Senkrecht", "Vertically")).clicked() {
                     y_mm = ((lh as f32 - b.h) / 2.0).round() / PX_PER_MM;
                 }
             });
@@ -1580,7 +1620,7 @@ fn demo_label() -> Label {
                 x_mm: 2.5,
                 y_mm: 3.0,
                 kind: ElementKind::Text(TextEl {
-                    text: "Kabel Büro\nRouter → Switch".into(),
+                    text: tr("Kabel Büro\nRouter → Switch", "Office cable\nRouter → Switch").into(),
                     fit: false,
                     size_pt: 11.0,
                     align: model::Align::Left,

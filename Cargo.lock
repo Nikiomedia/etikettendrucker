@@ -1220,7 +1220,7 @@ checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
 name = "etikettendrucker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "barcoders",
@@ -1234,6 +1234,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sys-locale",
  "tokio",
  "uuid",
  "winresource",
@@ -3393,6 +3394,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

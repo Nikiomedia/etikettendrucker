@@ -1,5 +1,7 @@
 #![windows_subsystem = "windows"]
 
+#[macro_use]
+mod i18n;
 mod app;
 mod icon;
 mod model;

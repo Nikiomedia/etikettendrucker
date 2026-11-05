@@ -12,6 +12,7 @@ use futures::StreamExt;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
+use crate::i18n::tr;
 use crate::protocol::{self, PrintJob, Response};
 
 pub enum Cmd {
@@ -49,8 +50,8 @@ pub enum Event {
     Connected(String),
     Disconnected,
     Battery(u8),
-    /// Statusmeldung des Druckers (Papier, Deckel, …)
-    Status(String),
+    /// Statusmeldung des Druckers (Papier, Deckel, …) als Code, Text über `protocol::status_text`
+    Status(u8),
     Progress { sent: usize, total: usize },
     PrintDone(Result<(), String>),
     Error(String),
@@ -114,7 +115,7 @@ async fn worker(mut cmds: UnboundedReceiver<Cmd>, em: Emitter) {
     let manager = match Manager::new().await {
         Ok(m) => m,
         Err(e) => {
-            em.send(Event::Error(format!("Bluetooth nicht verfügbar: {e}")));
+            em.send(Event::Error(trf!("Bluetooth nicht verfügbar: {e}", "Bluetooth not available: {e}")));
             return;
         }
     };
@@ -142,7 +143,7 @@ async fn worker(mut cmds: UnboundedReceiver<Cmd>, em: Emitter) {
             Cmd::Print { job, copies } => {
                 let result = match conn.as_mut() {
                     Some(c) if c.alive() => c.print(&job, copies.max(1), &em).await,
-                    _ => Err("Kein Drucker verbunden.".into()),
+                    _ => Err(tr("Kein Drucker verbunden.", "No printer connected.").into()),
                 };
                 em.send(Event::PrintDone(result));
                 if let Some(c) = conn.as_mut().filter(|c| c.alive()) {
@@ -220,7 +221,11 @@ fn not_found_message(seen_any: bool) -> String {
          oder einem Browser-Tab verbunden sein."
             .into()
     } else {
-        "Keine Bluetooth-Geräte gefunden. Ist Bluetooth am PC eingeschaltet?".into()
+        tr(
+            "Keine Bluetooth-Geräte gefunden. Ist Bluetooth am PC eingeschaltet?",
+            "No Bluetooth devices found. Is Bluetooth turned on on this PC?",
+        )
+        .into()
     }
 }
 
@@ -245,7 +250,7 @@ async fn discover(
     central
         .start_scan(ScanFilter::default())
         .await
-        .map_err(|e| format!("Suche fehlgeschlagen (ist Bluetooth eingeschaltet?): {e}"))?;
+        .map_err(|e| trf!("Suche fehlgeschlagen (ist Bluetooth eingeschaltet?): {e}", "Scan failed (is Bluetooth turned on?): {e}"))?;
 
     let start = Instant::now();
     let mut seen_any = false;
@@ -271,7 +276,7 @@ async fn discover(
                             0 => {}
                             1 => break Ok(Some((known[0].0.clone(), known[0].1.name.clone()))),
                             n => {
-                                em.log(format!("{n} Drucker gefunden – Auswahl anzeigen"));
+                                em.log(trf!("{n} Drucker gefunden – Auswahl anzeigen", "{n} printers found – showing selection"));
                                 picking = true;
                             }
                         }
@@ -287,7 +292,7 @@ async fn discover(
                         last_sent = Some(list);
                     }
                     if elapsed >= Duration::from_secs(120) {
-                        em.log("Auswahl nach 2 Minuten ohne Entscheidung beendet");
+                        em.log(tr("Auswahl nach 2 Minuten ohne Entscheidung beendet", "Selection closed after 2 minutes without a choice"));
                         break Ok(None);
                     }
                 }
@@ -297,7 +302,7 @@ async fn discover(
                     if let Some((p, f)) = known.iter().find(|(_, f)| f.address == addr) {
                         break Ok(Some((p.clone(), f.name.clone())));
                     }
-                    em.log("Der gewählte Drucker ist nicht mehr zu sehen");
+                    em.log(tr("Der gewählte Drucker ist nicht mehr zu sehen", "The selected printer is no longer visible"));
                 }
                 Some(Cmd::CancelChoice) | None => break Ok(None),
                 // Andere Befehle sind während der Suche nicht möglich
@@ -335,10 +340,10 @@ async fn first_adapter(manager: &Manager) -> Result<Adapter, String> {
     manager
         .adapters()
         .await
-        .map_err(|e| format!("Bluetooth nicht verfügbar: {e}"))?
+        .map_err(|e| trf!("Bluetooth nicht verfügbar: {e}", "Bluetooth not available: {e}"))?
         .into_iter()
         .next()
-        .ok_or_else(|| "Kein Bluetooth-Adapter gefunden. Ist Bluetooth eingeschaltet?".to_string())
+        .ok_or_else(|| tr("Kein Bluetooth-Adapter gefunden. Ist Bluetooth eingeschaltet?", "No Bluetooth adapter found. Is Bluetooth turned on?").to_string())
 }
 
 impl Connection {
@@ -354,24 +359,27 @@ impl Connection {
                 }
                 Err(e) => {
                     last_err = e.to_string();
-                    em.log(format!("Verbindungsversuch {attempt} fehlgeschlagen: {e}"));
+                    em.log(trf!("Verbindungsversuch {attempt} fehlgeschlagen: {e}", "Connection attempt {attempt} failed: {e}"));
                     tokio::time::sleep(Duration::from_millis(300)).await;
                 }
             }
         }
         if !ok {
-            return Err(format!("Verbindung zu {name} fehlgeschlagen: {last_err}"));
+            return Err(trf!("Verbindung zu {name} fehlgeschlagen: {last_err}", "Connecting to {name} failed: {last_err}"));
         }
 
         if let Err(e) = periph.discover_services().await {
             let _ = periph.disconnect().await;
-            return Err(format!("Dienste des Druckers nicht lesbar: {e}"));
+            return Err(trf!("Dienste des Druckers nicht lesbar: {e}", "Could not read the printer’s services: {e}"));
         }
         let chars = periph.characteristics();
         let find = |uuid| chars.iter().find(|c| c.uuid == uuid && c.service_uuid == protocol::SERVICE_UUID).cloned();
         let (Some(tx), Some(rx)) = (find(protocol::TX_UUID), find(protocol::RX_UUID)) else {
             let _ = periph.disconnect().await;
-            return Err(format!("{name} spricht nicht das erwartete Protokoll (Dienst FF00 fehlt)."));
+            return Err(trf!(
+                "{name} spricht nicht das erwartete Protokoll (Dienst FF00 fehlt).",
+                "{name} does not speak the expected protocol (service FF00 is missing)."
+            ));
         };
         let cx = find(protocol::CX_UUID);
 
@@ -384,7 +392,7 @@ impl Connection {
         let (msg_tx, msgs) = unbounded_channel();
 
         // Erst den Benachrichtigungs-Strom holen, dann abonnieren – sonst gehen die ersten Credits verloren.
-        let mut notifs = periph.notifications().await.map_err(|e| format!("Benachrichtigungen: {e}"))?;
+        let mut notifs = periph.notifications().await.map_err(|e| trf!("Benachrichtigungen: {e}", "Notifications: {e}"))?;
         let mut tasks = Vec::new();
         {
             let shared = shared.clone();
@@ -397,9 +405,9 @@ impl Connection {
             }));
         }
 
-        periph.subscribe(&rx).await.map_err(|e| format!("Abonnieren fehlgeschlagen: {e}"))?;
+        periph.subscribe(&rx).await.map_err(|e| trf!("Abonnieren fehlgeschlagen: {e}", "Subscribing failed: {e}"))?;
         if let Some(cx) = &cx {
-            periph.subscribe(cx).await.map_err(|e| format!("Abonnieren fehlgeschlagen: {e}"))?;
+            periph.subscribe(cx).await.map_err(|e| trf!("Abonnieren fehlgeschlagen: {e}", "Subscribing failed: {e}"))?;
         }
 
         // Trennung erkennen
@@ -412,7 +420,7 @@ impl Connection {
                     if let CentralEvent::DeviceDisconnected(d) = ev {
                         if d == id {
                             shared.alive.store(false, Ordering::SeqCst);
-                            em.log("Drucker hat die Verbindung getrennt");
+                            em.log(tr("Drucker hat die Verbindung getrennt", "Printer closed the connection"));
                             em.send(Event::Disconnected);
                             break;
                         }
@@ -429,7 +437,7 @@ impl Connection {
             while conn.credits() <= 0 && start.elapsed() < Duration::from_secs(3) {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            em.log(format!("Start-Credits: {}", conn.credits()));
+            em.log(trf!("Start-Credits: {}", "Initial credits: {}", conn.credits()));
         }
         conn.drain();
         Ok(conn)
@@ -462,7 +470,7 @@ impl Connection {
         let mut offset = 0;
         while offset < data.len() {
             if !self.alive() {
-                return Err("Verbindung zum Drucker verloren.".into());
+                return Err(tr("Verbindung zum Drucker verloren.", "Connection to the printer was lost.").into());
             }
             // Nach 1 s ohne Credits einen erzwingen
             if self.credits() <= 0 {
@@ -481,7 +489,7 @@ impl Connection {
                         self.shared.packet_size.store(20, Ordering::SeqCst);
                         continue;
                     }
-                    return Err(format!("Senden fehlgeschlagen: {e}"));
+                    return Err(trf!("Senden fehlgeschlagen: {e}", "Sending failed: {e}"));
                 }
                 self.shared.credits.fetch_sub(1, Ordering::SeqCst);
                 offset += size;
@@ -510,7 +518,7 @@ impl Connection {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                return Err("Keine Rückmeldung vom Drucker (Zeitüberschreitung).".into());
+                return Err(tr("Keine Rückmeldung vom Drucker (Zeitüberschreitung).", "No response from the printer (timeout).").into());
             }
             match tokio::time::timeout(Duration::from_millis(200), self.msgs.recv()).await {
                 Ok(Some((_, data))) => match protocol::parse_response(&data) {
@@ -520,7 +528,7 @@ impl Connection {
                     }
                     _ => {}
                 },
-                Ok(None) => return Err("Verbindung zum Drucker verloren.".into()),
+                Ok(None) => return Err(tr("Verbindung zum Drucker verloren.", "Connection to the printer was lost.").into()),
                 Err(_) => {}
             }
         }
@@ -529,8 +537,9 @@ impl Connection {
     async fn print(&mut self, job: &PrintJob, copies: u32, em: &Emitter) -> Result<(), String> {
         let single = job.preamble.len() + job.bulk.len();
         let total = single * copies as usize;
-        em.log(format!(
+        em.log(trf!(
             "Druck: {} Byte Bild, {} Kopie(n), Paketgröße {}",
+            "Print: {} byte image, {} copies, packet size {}",
             job.bulk.len(),
             copies,
             self.shared.packet_size.load(Ordering::SeqCst)
@@ -545,7 +554,7 @@ impl Connection {
             self.send(&job.bulk, |sent| em.send(Event::Progress { sent: base + pre + sent, total }))
                 .await?;
             self.wait_print_result(Duration::from_secs(30)).await?;
-            em.log(format!("Etikett {} von {copies} fertig", copy + 1));
+            em.log(trf!("Etikett {} von {copies} fertig", "Label {} of {copies} done", copy + 1));
         }
         Ok(())
     }
@@ -558,7 +567,7 @@ impl Connection {
             match tokio::time::timeout(Duration::from_millis(200), self.msgs.recv()).await {
                 // Antworten, die kein bekanntes Format haben, sind die Akku-Antwort (wie in thermoprint)
                 Ok(Some((Source::Rx, data))) if protocol::parse_response(&data).is_none() => {
-                    em.log(format!("Akku-Antwort: {}", hex(&data)));
+                    em.log(trf!("Akku-Antwort: {}", "Battery reply: {}", hex(&data)));
                     let level = if data.len() >= 2 { data[1] } else { *data.first()? };
                     return (level <= 100).then_some(level);
                 }
@@ -588,14 +597,14 @@ fn handle_notification(
             if mtu > 3 {
                 let size = (mtu as usize - 3).min(protocol::PACKET_SIZE);
                 shared.packet_size.store(size, Ordering::SeqCst);
-                em.log(format!("MTU {mtu} → Paketgröße {size}"));
+                em.log(trf!("MTU {mtu} → Paketgröße {size}", "MTU {mtu} → packet size {size}"));
             }
             return;
         }
         (Source::Cx, Some(Response::Success)) => {}
         (Source::Cx, _) => return,
         (Source::Rx, Some(Response::Status(code))) => {
-            em.send(Event::Status(protocol::status_text(code)));
+            em.send(Event::Status(code));
         }
         _ => {}
     }

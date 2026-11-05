@@ -11,6 +11,8 @@
 
 <p align="center">
   <a href="https://github.com/Nikiomedia/etikettendrucker/releases/latest"><b>⬇ Download für Windows</b></a>
+  &nbsp;·&nbsp;
+  <a href="README.en.md">🇬🇧 English version</a>
 </p>
 
 ![Die App im hellen Design](docs/screenshot-hell.png)
@@ -18,6 +20,7 @@
 Für viele günstige Bluetooth-Etikettendrucker gibt es nur eine App für iOS und Android.
 Dieses Projekt bringt den Drucker an den PC: mit großer Vorschau, allen Windows-Schriften,
 Vorlagen zum Speichern und einer Druckerauswahl, falls mehrere Geräte in der Nähe sind.
+Die Oberfläche gibt es auf **Deutsch und Englisch**.
 
 ---
 
@@ -68,6 +71,9 @@ Modell, Bluetooth-Name und dem Inhalt des Protokollfensters.
 - **Vorlagen** speichern und öffnen (`.etikett`-Dateien, Bilder sind darin enthalten).
 - **Akkustand** des Druckers in der Kopfzeile.
 - **Helles und dunkles Design**, folgt der Windows-Einstellung.
+- **Deutsch und Englisch**, umschaltbar oben rechts mit **DE | EN**. Beim ersten Start nimmt die App
+  die Sprache von Windows, danach merkt sie sich deine Wahl. Auch Fehlermeldungen und das Protokoll
+  wechseln mit.
 
 ### Mehrere Drucker? Kein Problem.
 
@@ -139,6 +145,7 @@ So spricht sie mit dem Drucker:
 | `src/model.rs` | Datenmodell, wird als Vorlage gespeichert |
 | `src/app.rs` | Oberfläche |
 | `src/ui_kit.rs` | Design-System: Farben, Schriften, eigene Bedienelemente |
+| `src/i18n.rs` | Sprachumschaltung – jeder Text steht als Paar `tr("Deutsch", "English")` direkt im Code |
 
 ### Selbst bauen
 

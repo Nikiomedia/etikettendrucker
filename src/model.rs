@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::tr;
 use crate::protocol::PaperType;
 
 /// Etikettengrößen, die es für den P15 gibt (Breite × Höhe in mm).
@@ -45,7 +46,7 @@ impl Default for Label {
             paper: PaperType::Gap,
             margin_mm: 1.0,
             frame: Frame::default(),
-            elements: vec![Element::new_text("Beschriftung")],
+            elements: vec![Element::new_text(tr("Beschriftung", "Label"))],
         }
     }
 }
@@ -193,9 +194,9 @@ impl Element {
     pub fn type_name(&self) -> &'static str {
         match self.kind {
             ElementKind::Text(_) => "Text",
-            ElementKind::Qr(_) => "QR-Code",
+            ElementKind::Qr(_) => tr("QR-Code", "QR code"),
             ElementKind::Barcode(_) => "Barcode",
-            ElementKind::Image(_) => "Bild",
+            ElementKind::Image(_) => tr("Bild", "Image"),
         }
     }
 
@@ -205,7 +206,7 @@ impl Element {
             ElementKind::Text(t) => t.text.lines().next().unwrap_or("").to_string(),
             ElementKind::Qr(q) => q.content.clone(),
             ElementKind::Barcode(b) => b.content.clone(),
-            ElementKind::Image(i) => format!("{:.0} mm breit", i.width_mm),
+            ElementKind::Image(i) => trf!("{:.0} mm breit", "{:.0} mm wide", i.width_mm),
         };
         let mut short: String = s.chars().take(22).collect();
         if s.chars().count() > 22 {

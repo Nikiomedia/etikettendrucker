@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use crate::i18n::tr;
 
 /// 203 dpi ≈ 8 Punkte pro Millimeter.
 pub const PX_PER_MM: f32 = 8.0;
@@ -149,12 +150,12 @@ pub fn parse_response(data: &[u8]) -> Option<Response> {
 
 pub fn status_text(code: u8) -> String {
     match code {
-        0x01 => "Kein Papier eingelegt".into(),
-        0x02 => "Deckel ist offen".into(),
-        0x03 => "Drucker ist überhitzt".into(),
-        0x04 => "Akku fast leer".into(),
-        0x05 => "Deckel geschlossen".into(),
-        other => format!("Unbekannter Status 0x{other:02X}"),
+        0x01 => tr("Kein Papier eingelegt", "No paper loaded").into(),
+        0x02 => tr("Deckel ist offen", "Cover is open").into(),
+        0x03 => tr("Drucker ist überhitzt", "Printer is overheated").into(),
+        0x04 => tr("Akku fast leer", "Battery low").into(),
+        0x05 => tr("Deckel geschlossen", "Cover closed").into(),
+        other => trf!("Unbekannter Status 0x{other:02X}", "Unknown status 0x{other:02X}"),
     }
 }
 
